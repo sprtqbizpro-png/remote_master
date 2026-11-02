@@ -1,15 +1,13 @@
 import "server-only";
 import bcrypt from "bcryptjs";
-import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
-import { db } from "./db";
+import { databaseProblem, db } from "./db";
 import { memo } from "./memo";
+import { SESSION_COOKIE, readToken, renewedToken, sessionCookieOptions, signToken, type TokenPayload } from "./session-token";
 
-export const SESSION_COOKIE = "rb_session";
-const SESSION_TTL = 60 * 60 * 24 * 7; // 7 days
-const EXTENSION_TTL = 60 * 60 * 24 * 30; // 30 days
+export { SESSION_COOKIE, signToken };
 
 export type Role = "OWNER" | "APPLIER";
 
@@ -20,12 +18,15 @@ export type SessionUser = {
   role: Role;
 };
 
-type TokenPayload = { sub: string; tv: number; kind: "web" | "ext" };
-
-function secret() {
-  const value = process.env.AUTH_SECRET;
-  if (!value || value.length < 16) throw new Error("AUTH_SECRET is missing or too short");
-  return new TextEncoder().encode(value);
+/**
+ * The session could not be checked because the database is unreachable or timed out. This is not
+ * "signed out": pages show a retry screen and the extension gets a 503, so nobody loses their session.
+ */
+export class AuthUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(databaseProblem(cause), { cause });
+    this.name = "AuthUnavailableError";
+  }
 }
 
 export function hashPassword(password: string) {
@@ -34,16 +35,6 @@ export function hashPassword(password: string) {
 
 export function verifyPassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
-}
-
-export async function signToken(payload: TokenPayload) {
-  const ttl = payload.kind === "ext" ? EXTENSION_TTL : SESSION_TTL;
-  return new SignJWT({ tv: payload.tv, kind: payload.kind })
-    .setProtectedHeader({ alg: "HS256" })
-    .setSubject(payload.sub)
-    .setIssuedAt()
-    .setExpirationTime(`${ttl}s`)
-    .sign(secret());
 }
 
 /**
@@ -59,17 +50,32 @@ export function forgetUser(id?: string) {
   authUser.invalidate(id);
 }
 
-async function userFromToken(token: string | undefined, kind: TokenPayload["kind"]) {
-  if (!token) return null;
+/** Loads the user, retrying once: a single dropped connection shouldn't fail the request. */
+async function loadAuthUser(id: string) {
   try {
-    const { payload } = await jwtVerify(token, secret());
-    if (payload.kind !== kind || typeof payload.sub !== "string") return null;
-    const user = await authUser(payload.sub);
-    if (!user || !user.active || user.tokenVersion !== payload.tv) return null;
-    return { id: user.id, email: user.email, name: user.name, role: user.role as Role } satisfies SessionUser;
+    return await authUser(id);
   } catch {
-    return null;
+    await new Promise((r) => setTimeout(r, 400));
+    try {
+      return await authUser(id);
+    } catch (error) {
+      console.error("[auth] session check failed (database):", error);
+      throw new AuthUnavailableError(error);
+    }
   }
+}
+
+/**
+ * The signed-in user, or null when the token is missing, invalid, expired or revoked (disabled
+ * account, password reset). Throws AuthUnavailableError when the database can't be reached:
+ * that must never look like a sign-out.
+ */
+async function userFromToken(token: string | undefined, kind: TokenPayload["kind"]) {
+  const payload = await readToken(token, kind);
+  if (!payload) return null;
+  const user = await loadAuthUser(payload.sub);
+  if (!user || !user.active || user.tokenVersion !== payload.tv) return null;
+  return { id: user.id, email: user.email, name: user.name, role: user.role as Role } satisfies SessionUser;
 }
 
 /** Validates email + password and returns the user, or null. */
@@ -83,13 +89,7 @@ export async function authenticate(email: string, password: string) {
 
 export async function startSession(user: { id: string; tokenVersion: number }) {
   const token = await signToken({ sub: user.id, tv: user.tokenVersion, kind: "web" });
-  (await cookies()).set(SESSION_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_TTL,
-  });
+  (await cookies()).set(SESSION_COOKIE, token, sessionCookieOptions);
 }
 
 export async function endSession() {
@@ -112,10 +112,19 @@ export async function requireOwner() {
 }
 
 /** Resolves the extension user from an `Authorization: Bearer <token>` header. */
-export async function getBearerUser(request: Request) {
+function bearerToken(request: Request) {
   const header = request.headers.get("authorization") ?? "";
-  const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : undefined;
-  return userFromToken(token, "ext");
+  return header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : undefined;
+}
+
+export async function getBearerUser(request: Request) {
+  return userFromToken(bearerToken(request), "ext");
+}
+
+/** A renewed extension token when the request's one is due (sent back in the X-RB-Token header), else null. */
+export async function renewedBearerToken(request: Request) {
+  const payload = await readToken(bearerToken(request), "ext").catch(() => null);
+  return payload ? renewedToken(payload) : null;
 }
 
 /** Cookie session for browser fetches to route handlers, falling back to the extension bearer token. */

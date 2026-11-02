@@ -3,7 +3,8 @@ import { getSessionUser } from "@/lib/auth";
 import { LoginForm } from "./login-form";
 
 export default async function LoginPage(props: PageProps<"/login">) {
-  if (await getSessionUser()) redirect("/applications");
+  // Database unreachable: show the form rather than an error (signing in reports it if it persists).
+  if (await getSessionUser().catch(() => null)) redirect("/applications");
   const { next } = await props.searchParams;
   return (
     <main className="flex min-h-screen items-center justify-center px-4">
