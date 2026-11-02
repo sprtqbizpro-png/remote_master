@@ -1,0 +1,158 @@
+// Supabase Postgres. DATABASE_URL is the runtime connection (the session pooler for a long-running
+// server; see .env.example); DIRECT_URL is the session connection Prisma uses for migrations.
+generator client {
+  provider        = "prisma-client-js"
+  // Load relations (e.g. an application with its user) in one JOIN query instead of one query per
+  // relation: each query is a full network round trip to the database.
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  /// "OWNER" (platform owner / admin) or "APPLIER" (job applier using the extension)
+  role         String   @default("APPLIER")
+  active       Boolean  @default(true)
+  /// Bumped to revoke every issued token (password reset, deactivation).
+  tokenVersion Int      @default(0)
+  lastLoginAt  DateTime?
+  /// The applier's own Google Sheet; empty = use the platform default sheet.
+  sheetId      String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  applications Application[]
+  events       ApplicationEvent[]
+  templates    ResumeTemplate[]
+  prompts      ResumePrompt[]
+}
+
+model Stage {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("#64748b")
+  order     Int      @default(0)
+  /// Stage new applications land in when saved from the extension.
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  applications Application[]
+}
+
+model Application {
+  id           String    @id @default(cuid())
+  userId       String
+  stageId      String
+  /// Fractional ordering inside a board column.
+  position     Float     @default(0)
+
+  title        String
+  company      String    @default("")
+  location     String    @default("")
+  jobType      String    @default("")
+  salary       String    @default("")
+  postedAt     String    @default("")
+  jobUrl       String    @default("")
+  applyUrl     String    @default("")
+  /// Normalised URLs (no tracking params, www or trailing slash) for duplicate detection.
+  jobUrlKey    String    @default("")
+  applyUrlKey  String    @default("")
+  /// Site label, e.g. "Jobright", "HiringCafe", "greenhouse.io".
+  source       String    @default("")
+  description  String    @default("")
+  /// JSON object of any extra fields captured by the extension.
+  extra        String    @default("{}")
+  notes        String    @default("")
+
+  resumeName   String    @default("")
+  resumeUrl    String    @default("")
+  /// "drive" or "local"
+  resumeStore  String    @default("")
+  resumeFileId String    @default("")
+
+  /// Google Sheet (spreadsheet id), tab and job key this application was matched to.
+  sheetId      String    @default("")
+  sheetTab     String    @default("")
+  jobKey       String    @default("")
+
+  appliedAt    DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stage  Stage              @relation(fields: [stageId], references: [id])
+  events ApplicationEvent[]
+
+  @@index([userId])
+  @@index([userId, appliedAt])
+  @@index([appliedAt])
+  @@index([stageId, position])
+  @@index([jobUrlKey])
+  @@index([applyUrlKey])
+}
+
+model ApplicationEvent {
+  id            String   @id @default(cuid())
+  applicationId String
+  userId        String?
+  /// "created" | "stage" | "note" | "resume" | "edit"
+  type          String
+  message       String
+  createdAt     DateTime @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+/// A .docx resume template used to generate job-specific resumes.
+model ResumeTemplate {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String   @default("")
+  fileName    String
+  mimeType    String
+  size        Int
+  data        Bytes
+  /// Visible to every user (only owners can share).
+  shared      Boolean  @default(false)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// A resume-generation prompt. Placeholders such as {{jobTitle}} and {{jobDescription}} are
+/// filled with the job's details when the prompt is copied.
+model ResumePrompt {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  body      String
+  shared    Boolean  @default(false)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
