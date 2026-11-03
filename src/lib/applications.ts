@@ -74,19 +74,94 @@ async function defaultStage() {
   return stage;
 }
 
+/** The database client, or a transaction's client: reads inside a save must see the transaction. */
+type Db = Prisma.TransactionClient;
+
 /** Position that places a card at the top of a board column. */
-async function topPosition(stageId: string) {
-  const first = await db.application.findFirst({ where: { stageId }, orderBy: { position: "asc" } });
+async function topPosition(stageId: string, client: Db = db) {
+  const first = await client.application.findFirst({ where: { stageId }, orderBy: { position: "asc" } });
   return first ? first.position - 1 : 0;
+}
+
+/**
+ * What a save must be confirmed against: the same job already recorded as applied (by anyone, by
+ * URL), and the caller's own applications still in progress at the same company. Only conflicts
+ * the applicant hasn't acknowledged (by id) count: a confirmation covers exactly what was shown.
+ */
+export type SaveConflicts = {
+  matches: Awaited<ReturnType<typeof findExistingApplications>>;
+  companyMatches: Awaited<ReturnType<typeof findCompanyApplications>>;
+};
+
+export async function findSaveConflicts(
+  user: SessionUser,
+  job: { urls: string[]; company: string },
+  acknowledged: ReadonlySet<string>,
+  client: Db = db,
+): Promise<SaveConflicts> {
+  const [matches, sameCompany] = await Promise.all([
+    findExistingApplications(user, job.urls, client),
+    job.company ? findCompanyApplications(user, job.company, client) : Promise.resolve([]),
+  ]);
+  const sameJob = new Set(matches.map((m) => m.id));
+  return {
+    matches: matches.filter((m) => !acknowledged.has(m.id)),
+    // Closed applications (rejected, withdrawn, ...) never block a save.
+    companyMatches: sameCompany.filter((a) => a.active && !sameJob.has(a.id) && !acknowledged.has(a.id)),
+  };
+}
+
+export const hasConflicts = (c: SaveConflicts) => c.matches.length > 0 || c.companyMatches.length > 0;
+
+/** Thrown when a save would duplicate a job or company the applicant hasn't confirmed. */
+export class SaveConflictError extends Error {
+  constructor(readonly conflicts: SaveConflicts) {
+    super(
+      conflicts.matches.length
+        ? "This job was just recorded as applied. Confirm to save it again."
+        : "You have another application in progress at this company. Confirm to save anyway.",
+    );
+  }
+}
+
+/**
+ * Locks this job (each of its URLs) and its company until the transaction ends, so that two saves
+ * of the same job, or at the same company, run one after the other: the second one then sees the
+ * first and is asked to confirm, instead of both passing their checks at the same moment.
+ * Keys are taken in sorted order so concurrent saves can never deadlock.
+ */
+async function lockJob(client: Db, job: { urls: string[]; company: string }) {
+  const keys = [
+    ...new Set([
+      ...job.urls.map(normalizeUrl).filter(Boolean).map((u) => `url:${u}`),
+      ...(normalizeCompany(job.company) ? [`company:${normalizeCompany(job.company)}`] : []),
+    ]),
+  ].sort();
+  for (const key of keys) {
+    await client.$queryRaw`SELECT count(*)::int AS locked FROM (SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))) AS l`;
+  }
 }
 
 /**
  * Creates an application, stores the resume (Drive or local) and marks the job as applied in
  * the applier's Google Sheet. Sheet failures do not fail the save; they are returned as warnings.
+ *
+ * With `guard`, the save is checked for conflicts (see findSaveConflicts) and throws
+ * SaveConflictError for any the applicant hasn't acknowledged. It is checked twice: quickly before
+ * the resume upload (so a conflict doesn't wait for it), and again right before inserting, under a
+ * lock on the job and the company, in the same transaction as the insert. That final check is the
+ * one that counts: whatever anyone saved in the meantime is seen there.
  */
-export async function createApplication(user: SessionUser, raw: unknown, resume?: File | null) {
+export async function createApplication(
+  user: SessionUser,
+  raw: unknown,
+  resume?: File | null,
+  options: { guard?: { acknowledged: ReadonlySet<string> } } = {},
+) {
   const input = applicationInput.parse(raw);
   const warnings: string[] = [];
+  const guard = options.guard;
+  const job = { urls: [input.jobUrl, input.applyUrl], company: input.company };
 
   const stage = input.stageId ? await stageById(input.stageId) : null;
   const targetStage = stage ?? (await defaultStage());
@@ -94,6 +169,10 @@ export async function createApplication(user: SessionUser, raw: unknown, resume?
   if (resume) {
     const problem = validateResume(resume);
     if (problem) throw new UserFacingError(problem);
+  }
+  if (guard) {
+    const early = await findSaveConflicts(user, job, guard.acknowledged);
+    if (hasConflicts(early)) throw new SaveConflictError(early);
   }
   const stored = resume
     ? await storeResume(resume, {
@@ -103,11 +182,12 @@ export async function createApplication(user: SessionUser, raw: unknown, resume?
     : null;
 
   const source = input.source || (input.jobUrl || input.applyUrl ? siteLabel(input.jobUrl || input.applyUrl) : "Manual");
-  const application = await db.application.create({
+  const insert = async (client: Db) =>
+    client.application.create({
     data: {
       userId: user.id,
       stageId: targetStage.id,
-      position: await topPosition(targetStage.id),
+      position: await topPosition(targetStage.id, client),
       title: input.title,
       company: input.company,
       location: input.location,
@@ -134,7 +214,21 @@ export async function createApplication(user: SessionUser, raw: unknown, resume?
         },
       },
     },
-  }).catch(async (error) => {
+  });
+  const application = await (guard
+    ? db.$transaction(
+        async (tx) => {
+          await lockJob(tx, job);
+          const conflicts = await findSaveConflicts(user, job, guard.acknowledged, tx);
+          if (hasConflicts(conflicts)) throw new SaveConflictError(conflicts);
+          return insert(tx);
+        },
+        // Waiting for a lock held by another save, over a slow link: allow more than the 5 s default.
+        { maxWait: 20_000, timeout: 30_000 },
+      )
+    : insert(db)
+  ).catch(async (error) => {
+    // Nothing was saved: don't leave the uploaded resume behind.
     if (stored) await deleteStoredResume(stored);
     throw error;
   });
@@ -329,10 +423,10 @@ export async function deleteApplication(user: SessionUser, id: string) {
 }
 
 /** Finds existing applications for any of the given URLs (the caller's own and, for context, anyone's). */
-export async function findExistingApplications(user: SessionUser, urls: string[]) {
+export async function findExistingApplications(user: SessionUser, urls: string[], client: Db = db) {
   const keys = [...new Set(urls.map(normalizeUrl).filter(Boolean))];
   if (!keys.length) return [];
-  const candidates = await db.application.findMany({
+  const candidates = await client.application.findMany({
     where: { OR: [{ jobUrlKey: { in: keys } }, { applyUrlKey: { in: keys } }] },
     select: { id: true, userId: true, appliedAt: true, user: { select: { name: true } }, stage: { select: { name: true } } },
     orderBy: { appliedAt: "desc" },
@@ -362,30 +456,27 @@ export function isClosedStage(name: string) {
  * The caller's own applications at the same company (names compared loosely: "Acme, Inc." =
  * "ACME"), newest first.
  */
-export async function findCompanyApplications(user: SessionUser, company: string) {
+export async function findCompanyApplications(user: SessionUser, company: string, client: Db = db) {
   const target = normalizeCompany(company);
   if (!target) return [];
   // Narrow in the database by the company's longest word, then compare normalised names here.
   const word = target.split(" ").sort((a, b) => b.length - a.length)[0];
-  const candidates = await db.application.findMany({
+  const candidates = await client.application.findMany({
     where: {
       userId: user.id,
       ...(word.length >= 2 && company.toLowerCase().includes(word) && { company: { contains: word, mode: "insensitive" } }),
     },
-    select: { id: true, title: true, company: true, stageId: true, appliedAt: true },
+    // The stage name comes in the same query (and through `client`): inside a save transaction,
+    // a separate lookup on the shared client could wait for the very connection the transaction holds.
+    select: { id: true, title: true, company: true, appliedAt: true, stage: { select: { name: true } } },
     orderBy: { appliedAt: "desc" },
     take: 200,
   });
-  let stages = await listStages();
-  if (candidates.some((a) => !stages.some((st) => st.id === a.stageId))) {
-    forgetStages();
-    stages = await listStages();
-  }
   return candidates
     .filter((a) => normalizeCompany(a.company) === target)
     .slice(0, 20)
     .map((a) => {
-      const stage = stages.find((st) => st.id === a.stageId)?.name ?? "";
+      const stage = a.stage.name;
       return {
         id: a.id,
         title: a.title,
