@@ -2,14 +2,17 @@ import { requireOwner } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { googleAuthMode } from "@/lib/google";
 import { getSetting } from "@/lib/settings";
+import { DEFAULT_OPENAI_MODEL, openaiKey } from "@/lib/autofill";
+import { AutofillSettings } from "./autofill-settings";
 import { GoogleSettings } from "./google-settings";
 import { StagesManager } from "./stages-manager";
 
 export default async function SettingsPage() {
   await requireOwner();
-  const [sheetId, driveFolderId, stages] = await Promise.all([
+  const [sheetId, driveFolderId, openaiModel, stages] = await Promise.all([
     getSetting("sheetId"),
     getSetting("driveFolderId"),
+    getSetting("openaiModel"),
     db.stage.findMany({ orderBy: { order: "asc" }, include: { _count: { select: { applications: true } } } }),
   ]);
   const mode = googleAuthMode();
@@ -24,7 +27,7 @@ export default async function SettingsPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
         <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="text-sm text-slate-500">Google integration and application statuses.</p>
+        <p className="text-sm text-slate-500">Google integration, answer autofill and application statuses.</p>
       </div>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -40,6 +43,15 @@ export default async function SettingsPage() {
           </span>
         </div>
         <GoogleSettings sheetId={sheetId} driveFolderId={driveFolderId} />
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="font-semibold">Answer autofill (OpenAI)</h2>
+        <p className="mb-4 mt-1 text-sm text-slate-500">
+          The extension&apos;s &ldquo;Autofill answers&rdquo; fills an application form&apos;s open-ended questions with short answers written
+          from the attached resume and the job description. The resume and job are sent to OpenAI for this; nothing is stored.
+        </p>
+        <AutofillSettings model={openaiModel} defaultModel={DEFAULT_OPENAI_MODEL} hasKey={Boolean(openaiKey())} />
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">

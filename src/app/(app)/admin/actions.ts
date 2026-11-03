@@ -110,6 +110,18 @@ export async function deleteUserAction(id: string) {
   }, ["/admin/users", "/applications", "/board"]);
 }
 
+/* ---------------- Autofill (OpenAI) ---------------- */
+
+export async function saveAutofillSettingsAction(input: { model: string }) {
+  await requireOwner();
+  return run(async () => {
+    const model = input.model.trim();
+    if (model && !/^[\w.:-]{2,80}$/.test(model)) throw new UserFacingError("Enter a model name such as gpt-4.1-mini.");
+    await setSetting("openaiModel", model);
+    return "Saved.";
+  }, ["/admin/settings"]);
+}
+
 /* ---------------- Google settings ---------------- */
 
 export async function saveGoogleSettingsAction(input: { sheetId: string; driveFolderId: string }) {

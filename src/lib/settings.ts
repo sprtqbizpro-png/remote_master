@@ -1,11 +1,12 @@
 import "server-only";
 import { db } from "./db";
 
-export type SettingKey = "sheetId" | "driveFolderId";
+export type SettingKey = "sheetId" | "driveFolderId" | "openaiModel";
 
 const ENV_FALLBACK: Record<SettingKey, string | undefined> = {
   sheetId: process.env.GOOGLE_SHEET_ID,
   driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+  openaiModel: process.env.OPENAI_MODEL,
 };
 
 // Settings change rarely but are read on most requests (which sheet, which Drive folder), so all
