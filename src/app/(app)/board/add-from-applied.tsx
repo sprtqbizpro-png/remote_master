@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Input, Modal, ErrorText } from "@/components/ui";
-import { formatDate } from "@/lib/format";
+import { LocalTime } from "@/components/local-time";
 import { moveApplicationAction } from "../applications/actions";
 import { searchAppliedAction, type AppliedMatch } from "./actions";
 
@@ -77,7 +77,7 @@ function AppliedSearch({ stageId, applier, showApplier, onDone }: { stageId: str
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-slate-900">{m.title}</div>
                   <div className="truncate text-xs text-slate-500">
-                    {[m.company || "—", showApplier && m.applier, `applied ${formatDate(m.appliedAt)}`].filter(Boolean).join(" · ")}
+                    {[m.company || "—", showApplier && m.applier].filter(Boolean).join(" · ")} · applied <LocalTime value={m.appliedAt} />
                   </div>
                 </div>
                 <button

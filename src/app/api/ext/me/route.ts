@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { apiError, extRoute } from "@/lib/api";
+import { suspensionMessage } from "@/lib/auth";
 import { listStages } from "@/lib/applications";
 import { db } from "@/lib/db";
 import { googleAuthMode, googleShareHint } from "@/lib/google";
@@ -28,9 +29,13 @@ async function profile(userId: string) {
   };
 }
 
-export const GET = extRoute(async (_request, user) => {
-  return NextResponse.json({ user, ...(await profile(user.id)) });
-});
+export const GET = extRoute(
+  async (_request, user) => {
+    const suspension = user.suspended ? await suspensionMessage(user.suspendedReason) : "";
+    return NextResponse.json({ user, suspension, ...(await profile(user.id)) });
+  },
+  { allowSuspended: true },
+);
 
 /** Lets an applier set (or clear, with "") their own Google Sheet. */
 export const PUT = extRoute(async (request, user) => {

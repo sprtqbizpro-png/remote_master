@@ -1,9 +1,10 @@
-import { requireUser } from "@/lib/auth";
+import { requireUser, suspensionMessage, withCurrentSuspension } from "@/lib/auth";
 import { logout } from "../login/actions";
 import { NavLinks } from "./nav-links";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
-  const user = await requireUser();
+  const user = await withCurrentSuspension(await requireUser());
+  const suspension = user.suspended ? await suspensionMessage(user.suspendedReason) : "";
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -24,6 +25,13 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
           </div>
         </div>
       </header>
+      {suspension && (
+        <div role="alert" className="border-b border-red-200 bg-red-50">
+          <div className="mx-auto max-w-[1600px] px-4 py-2.5 text-sm text-red-800">
+            <strong className="font-semibold">Account suspended.</strong> {suspension} You can still view your applications.
+          </div>
+        </div>
+      )}
       <main className="mx-auto max-w-[1600px] px-4 py-6">{children}</main>
     </div>
   );

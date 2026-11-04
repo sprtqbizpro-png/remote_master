@@ -14,20 +14,24 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String
-  passwordHash String
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String
+  passwordHash    String
   /// "OWNER" (platform owner / admin) or "APPLIER" (job applier using the extension)
-  role         String   @default("APPLIER")
-  active       Boolean  @default(true)
+  role            String    @default("APPLIER")
+  active          Boolean   @default(true)
   /// Bumped to revoke every issued token (password reset, deactivation).
-  tokenVersion Int      @default(0)
-  lastLoginAt  DateTime?
+  tokenVersion    Int       @default(0)
+  /// Set while the owner has suspended this applier: they can sign in and look, but not apply.
+  suspendedAt     DateTime?
+  /// Shown to the applier with the suspension notice (optional).
+  suspendedReason String    @default("")
+  lastLoginAt     DateTime?
   /// The applier's own Google Sheet; empty = use the platform default sheet.
-  sheetId      String   @default("")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  sheetId         String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   applications Application[]
   events       ApplicationEvent[]
@@ -48,44 +52,44 @@ model Stage {
 }
 
 model Application {
-  id           String    @id @default(cuid())
-  userId       String
-  stageId      String
+  id       String @id @default(cuid())
+  userId   String
+  stageId  String
   /// Fractional ordering inside a board column.
-  position     Float     @default(0)
+  position Float  @default(0)
 
-  title        String
-  company      String    @default("")
-  location     String    @default("")
-  jobType      String    @default("")
-  salary       String    @default("")
-  postedAt     String    @default("")
-  jobUrl       String    @default("")
-  applyUrl     String    @default("")
+  title       String
+  company     String @default("")
+  location    String @default("")
+  jobType     String @default("")
+  salary      String @default("")
+  postedAt    String @default("")
+  jobUrl      String @default("")
+  applyUrl    String @default("")
   /// Normalised URLs (no tracking params, www or trailing slash) for duplicate detection.
-  jobUrlKey    String    @default("")
-  applyUrlKey  String    @default("")
+  jobUrlKey   String @default("")
+  applyUrlKey String @default("")
   /// Site label, e.g. "Jobright", "HiringCafe", "greenhouse.io".
-  source       String    @default("")
-  description  String    @default("")
+  source      String @default("")
+  description String @default("")
   /// JSON object of any extra fields captured by the extension.
-  extra        String    @default("{}")
-  notes        String    @default("")
+  extra       String @default("{}")
+  notes       String @default("")
 
-  resumeName   String    @default("")
-  resumeUrl    String    @default("")
+  resumeName   String @default("")
+  resumeUrl    String @default("")
   /// "drive" or "local"
-  resumeStore  String    @default("")
-  resumeFileId String    @default("")
+  resumeStore  String @default("")
+  resumeFileId String @default("")
 
   /// Google Sheet (spreadsheet id), tab and job key this application was matched to.
-  sheetId      String    @default("")
-  sheetTab     String    @default("")
-  jobKey       String    @default("")
+  sheetId  String @default("")
+  sheetTab String @default("")
+  jobKey   String @default("")
 
-  appliedAt    DateTime  @default(now())
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  appliedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   stage  Stage              @relation(fields: [stageId], references: [id])

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireUser } from "@/lib/auth";
+import { assertCanApply, requireUser } from "@/lib/auth";
 import { errorMessage } from "@/lib/applications";
 import { deletePrompt, deleteTemplate, duplicatePrompt, duplicateTemplate, savePrompt } from "@/lib/resume-kit";
 
@@ -22,25 +22,40 @@ export async function savePromptAction(
   id?: string,
 ) {
   const user = await requireUser();
-  return run(() => savePrompt(user, input, id));
+  return run(async () => {
+    await assertCanApply(user);
+    return savePrompt(user, input, id);
+  });
 }
 
 export async function duplicatePromptAction(id: string) {
   const user = await requireUser();
-  return run(() => duplicatePrompt(user, id));
+  return run(async () => {
+    await assertCanApply(user);
+    return duplicatePrompt(user, id);
+  });
 }
 
 export async function deletePromptAction(id: string) {
   const user = await requireUser();
-  return run(() => deletePrompt(user, id));
+  return run(async () => {
+    await assertCanApply(user);
+    return deletePrompt(user, id);
+  });
 }
 
 export async function duplicateTemplateAction(id: string) {
   const user = await requireUser();
-  return run(() => duplicateTemplate(user, id));
+  return run(async () => {
+    await assertCanApply(user);
+    return duplicateTemplate(user, id);
+  });
 }
 
 export async function deleteTemplateAction(id: string) {
   const user = await requireUser();
-  return run(() => deleteTemplate(user, id));
+  return run(async () => {
+    await assertCanApply(user);
+    return deleteTemplate(user, id);
+  });
 }

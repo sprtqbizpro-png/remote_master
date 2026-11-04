@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import { Button, ErrorText, Field, Input, Modal, Select, cn } from "@/components/ui";
 import { formatDate } from "@/lib/format";
-import { createUserAction, deleteUserAction, resetPasswordAction, updateUserAction } from "../actions";
+import { LocalTime } from "@/components/local-time";
+import { createUserAction, deleteUserAction, liftSuspensionAction, resetPasswordAction, suspendUserAction, updateUserAction } from "../actions";
 
 type Row = {
   id: string;
@@ -11,13 +12,15 @@ type Row = {
   email: string;
   role: "OWNER" | "APPLIER";
   active: boolean;
+  suspendedAt: string | null;
+  suspendedReason: string;
   sheetId: string;
   applications: number;
   lastLoginAt: string | null;
   createdAt: string;
 };
 
-type Dialog = { kind: "create" } | { kind: "edit"; user: Row } | { kind: "password"; user: Row } | null;
+type Dialog = { kind: "create" } | { kind: "edit"; user: Row } | { kind: "password"; user: Row } | { kind: "suspend"; user: Row } | null;
 
 export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -62,7 +65,19 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
                   </span>
                 </td>
                 <td className="px-3 py-2.5">
-                  {u.active ? <span className="text-emerald-600">Active</span> : <span className="text-slate-400">Disabled</span>}
+                  {!u.active ? (
+                    <span className="text-slate-400">Disabled</span>
+                  ) : u.suspendedAt ? (
+                    <div>
+                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Suspended</span>
+                      <div className="mt-0.5 max-w-56 text-xs text-slate-500">
+                        since <LocalTime value={u.suspendedAt} />
+                        {u.suspendedReason && <span className="block truncate" title={u.suspendedReason}>“{u.suspendedReason}”</span>}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-emerald-600">Active</span>
+                  )}
                 </td>
                 <td className="px-3 py-2.5">
                   {u.sheetId ? (
@@ -87,6 +102,28 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
                   <Button variant="ghost" size="sm" onClick={() => setDialog({ kind: "password", user: u })}>
                     Reset password
                   </Button>
+                  {u.role === "APPLIER" && u.id !== meId && u.active &&
+                    (u.suspendedAt ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-emerald-700 hover:bg-emerald-50"
+                        disabled={pending}
+                        onClick={() => {
+                          if (!confirm(`Lift ${u.name}'s suspension? They will be able to apply again right away.`)) return;
+                          start(async () => {
+                            const res = await liftSuspensionAction(u.id);
+                            if (!res.ok) alert(res.error);
+                          });
+                        }}
+                      >
+                        Lift suspension
+                      </Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" className="text-amber-700 hover:bg-amber-50" onClick={() => setDialog({ kind: "suspend", user: u })}>
+                        Suspend
+                      </Button>
+                    ))}
                   {u.id !== meId && (
                     <Button
                       variant="ghost"
@@ -122,6 +159,9 @@ export function UsersTable({ users, meId }: { users: Row[]; meId: string }) {
       </Modal>
       <Modal open={dialog?.kind === "password"} onClose={close} title="Reset password">
         {dialog?.kind === "password" && <PasswordForm user={dialog.user} onDone={close} />}
+      </Modal>
+      <Modal open={dialog?.kind === "suspend"} onClose={close} title="Suspend applier">
+        {dialog?.kind === "suspend" && <SuspendForm user={dialog.user} onDone={close} />}
       </Modal>
     </>
   );
@@ -228,6 +268,43 @@ function PasswordForm({ user, onDone }: { user: Row; onDone: () => void }) {
         </Button>
         <Button type="submit" disabled={pending}>
           {pending ? "Saving…" : "Update password"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function SuspendForm({ user, onDone }: { user: Row; onDone: () => void }) {
+  const [error, setError] = useState("");
+  const [pending, start] = useTransition();
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const reason = String(new FormData(e.currentTarget).get("reason") ?? "");
+        start(async () => {
+          const res = await suspendUserAction(user.id, reason);
+          if (!res.ok) return setError(res.error);
+          onDone();
+        });
+      }}
+    >
+      <p className="text-sm text-slate-600">
+        <strong>{user.name}</strong> stays signed in and can see their applications, but can&apos;t apply: saving, autofill and
+        scraping are refused in the extension and on the platform, with a message asking them to contact you. Lift the
+        suspension at any time.
+      </p>
+      <Field label="Reason (shown to the applier, optional)">
+        <Input name="reason" maxLength={300} placeholder="e.g. Please check in with me about your recent applications" />
+      </Field>
+      <ErrorText>{error}</ErrorText>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={pending} className="bg-amber-600 hover:bg-amber-700">
+          {pending ? "Suspending…" : "Suspend"}
         </Button>
       </div>
     </form>

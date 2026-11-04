@@ -35,4 +35,4 @@ export const POST = extRoute(async (request, user) => {
   const sheetId = await resolveSheetId(user.id);
   const result = await syncScrapedJobs(sheetId, site, keep, sourceUrl);
   return NextResponse.json({ ...result, skippedApplied: jobs.length - keep.length, sheetUrl: sheetUrlFor(sheetId) });
-});
+}, { applies: true });

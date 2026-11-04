@@ -16,7 +16,21 @@ export type SessionUser = {
   email: string;
   name: string;
   role: Role;
+  /** The owner has suspended this applier: they may sign in and look, but not apply. */
+  suspended: boolean;
+  suspendedReason: string;
 };
+
+/** Why an applier may not apply right now: their account was deleted, disabled or suspended. */
+export class CannotApplyError extends Error {
+  constructor(
+    readonly code: "deleted" | "disabled" | "suspended",
+    message: string,
+  ) {
+    super(message);
+    this.name = "CannotApplyError";
+  }
+}
 
 /**
  * The session could not be checked because the database is unreachable or timed out. This is not
@@ -42,12 +56,60 @@ export function verifyPassword(password: string, hash: string) {
  * to a user (edit, disable, delete, password reset) calls `forgetUser()`, so revocation is
  * immediate in this process.
  */
-const authUser = memo(30_000, (id: string) =>
-  db.user.findUnique({ where: { id }, select: { id: true, email: true, name: true, role: true, active: true, tokenVersion: true } }),
-);
+const AUTH_FIELDS = { id: true, email: true, name: true, role: true, active: true, tokenVersion: true, suspendedAt: true, suspendedReason: true } as const;
+const authUser = memo(30_000, (id: string) => db.user.findUnique({ where: { id }, select: AUTH_FIELDS }));
 
 export function forgetUser(id?: string) {
   authUser.invalidate(id);
+  ownerContacts.invalidate("all");
+}
+
+/** The active owners' names and emails, for "contact the owner" messages. */
+const ownerContacts = memo(60_000, async (_: "all") => {
+  const owners = await db.user.findMany({ where: { role: "OWNER", active: true }, select: { name: true, email: true }, orderBy: { createdAt: "asc" }, take: 3 });
+  return owners.map((o) => `${o.name} (${o.email})`).join(", ") || "the platform owner";
+});
+
+export async function suspensionMessage(reason: string) {
+  const contacts = await ownerContacts("all").catch(() => "the platform owner");
+  return `Your account has been suspended by the platform owner${reason ? ` (reason: ${reason})` : ""}, so you can't apply to jobs right now. Please contact ${contacts} about the suspension.`;
+}
+
+export async function removedMessage() {
+  const contacts = await ownerContacts("all").catch(() => "the platform owner");
+  return `Your account no longer exists: it was removed by the platform owner, so you can't process any applications. Contact ${contacts} if you think this is a mistake.`;
+}
+
+/**
+ * The user with their suspension re-read from the database when the cache says they are suspended.
+ * Lifting a suspension then works at once everywhere: the cache is per server instance (and per
+ * Next.js layer), so the owner's action can't clear every copy. Cheap: only suspended users pay.
+ */
+export async function withCurrentSuspension(user: SessionUser): Promise<SessionUser> {
+  if (!user.suspended) return user;
+  const fresh = await db.user.findUnique({ where: { id: user.id }, select: { suspendedAt: true, suspendedReason: true } }).catch(() => null);
+  if (!fresh) return user;
+  authUser.invalidate(user.id);
+  return { ...user, suspended: Boolean(fresh.suspendedAt), suspendedReason: fresh.suspendedReason };
+}
+
+/**
+ * Checks, straight from the database (not the short-lived cache), that this user may apply right
+ * now: the account still exists, is active and isn't suspended. Used by everything that applies
+ * (saving, autofill, scraping into the sheet, web edits), so a suspension or deletion takes effect
+ * on the very next attempt, on every server.
+ */
+export async function assertCanApply(user: SessionUser) {
+  let fresh;
+  try {
+    fresh = await db.user.findUnique({ where: { id: user.id }, select: AUTH_FIELDS });
+  } catch (error) {
+    throw new AuthUnavailableError(error);
+  }
+  authUser.invalidate(user.id);
+  if (!fresh) throw new CannotApplyError("deleted", await removedMessage());
+  if (!fresh.active) throw new CannotApplyError("disabled", "Your account has been deactivated by the platform owner. Contact them to restore access.");
+  if (fresh.suspendedAt) throw new CannotApplyError("suspended", await suspensionMessage(fresh.suspendedReason));
 }
 
 /** Loads the user, retrying once: a single dropped connection shouldn't fail the request. */
@@ -71,11 +133,31 @@ async function loadAuthUser(id: string) {
  * that must never look like a sign-out.
  */
 async function userFromToken(token: string | undefined, kind: TokenPayload["kind"]) {
+  return (await resolveToken(token, kind)).user;
+}
+
+/**
+ * The user behind a token, or why there is none: "invalid" (missing, bad, expired), "deleted"
+ * (the account was removed), "disabled", or "revoked" (signed out everywhere, e.g. password reset).
+ */
+async function resolveToken(token: string | undefined, kind: TokenPayload["kind"]): Promise<{ user: SessionUser | null; reason: "" | "invalid" | "deleted" | "disabled" | "revoked" }> {
   const payload = await readToken(token, kind);
-  if (!payload) return null;
+  if (!payload) return { user: null, reason: "invalid" };
   const user = await loadAuthUser(payload.sub);
-  if (!user || !user.active || user.tokenVersion !== payload.tv) return null;
-  return { id: user.id, email: user.email, name: user.name, role: user.role as Role } satisfies SessionUser;
+  if (!user) return { user: null, reason: "deleted" };
+  if (!user.active) return { user: null, reason: "disabled" };
+  if (user.tokenVersion !== payload.tv) return { user: null, reason: "revoked" };
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role as Role,
+      suspended: Boolean(user.suspendedAt),
+      suspendedReason: user.suspendedReason,
+    } satisfies SessionUser,
+    reason: "",
+  };
 }
 
 /** Validates email + password and returns the user, or null. */
@@ -119,6 +201,11 @@ function bearerToken(request: Request) {
 
 export async function getBearerUser(request: Request) {
   return userFromToken(bearerToken(request), "ext");
+}
+
+/** The extension user and, when there is none, why (see resolveToken). */
+export function getBearerAuth(request: Request) {
+  return resolveToken(bearerToken(request), "ext");
 }
 
 /** A renewed extension token when the request's one is due (sent back in the X-RB-Token header), else null. */

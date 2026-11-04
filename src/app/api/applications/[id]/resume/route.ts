@@ -1,6 +1,6 @@
 import { after, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { getRequestUser } from "@/lib/auth";
+import { assertCanApply, getRequestUser } from "@/lib/auth";
 import { errorMessage, replaceResume, syncApplicationToSheet } from "@/lib/applications";
 
 /** Replaces the resume of an application (used by the web detail page). */
@@ -11,6 +11,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/application
   const file = (await request.formData()).get("resume");
   if (!(file instanceof File)) return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
   try {
+    await assertCanApply(user);
     const app = await replaceResume(user, id, file);
     after(() => syncApplicationToSheet(id, { details: true }));
     revalidatePath(`/applications/${id}`);

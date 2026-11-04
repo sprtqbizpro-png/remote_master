@@ -3,10 +3,12 @@ import type { Prisma } from "@prisma/client";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { listStages, visibleWhere } from "@/lib/applications";
-import { first, formatDate } from "@/lib/format";
-import { DeleteApplicationButton, NewApplicationButton, StageSelect } from "@/components/application-controls";
-
-const PAGE_SIZE = 50;
+import { first } from "@/lib/format";
+import { DeleteApplicationButton, StageSelect } from "@/components/application-controls";
+import { AutoRefresh } from "@/components/auto-refresh";
+import { LocalTime } from "@/components/local-time";
+import { DEFAULT_PAGE_SIZE, PAGE_SIZES } from "./page-size";
+import { Pagination } from "./pagination";
 
 const SORTS: Record<string, Prisma.ApplicationOrderByWithRelationInput> = {
   newest: { appliedAt: "desc" },
@@ -25,7 +27,8 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
   const applier = isOwner ? first(sp.user) : "";
   const source = first(sp.source);
   const sort = SORTS[first(sp.sort)] ? first(sp.sort) : "newest";
-  const page = Math.max(1, Number(first(sp.page)) || 1);
+  const size = PAGE_SIZES.includes(Number(first(sp.size))) ? Number(first(sp.size)) : DEFAULT_PAGE_SIZE;
+  const requestedPage = Math.max(1, Number(first(sp.page)) || 1);
 
   const base = visibleWhere(user);
   const where: Prisma.ApplicationWhereInput = {
@@ -46,14 +49,18 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
     ],
   };
 
-  const [stages, total, applications, sources, appliers, stageCounts] = await Promise.all([
+  // Counted first, so a page past the end (after deletions, or a bigger page size) shows the last one.
+  const total = await db.application.count({ where });
+  const pages = Math.max(1, Math.ceil(total / size));
+  const page = Math.min(requestedPage, pages);
+  const [stages, applications, sources, appliers, stageCounts] = await Promise.all([
     listStages(),
-    db.application.count({ where }),
     db.application.findMany({
       where,
-      orderBy: SORTS[sort],
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
+      // Newest first by default; ties (same moment) in a stable order so pages never overlap.
+      orderBy: [SORTS[sort], { id: "desc" }],
+      skip: (page - 1) * size,
+      take: size,
       include: { user: { select: { name: true } } },
       omit: { description: true, extra: true }, // not shown in the table; can be large
     }),
@@ -61,12 +68,12 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
     isOwner ? db.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
     db.application.groupBy({ by: ["stageId"], where: base, _count: true }),
   ]);
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const stageOptions = stages.map((s) => ({ id: s.id, name: s.name, color: s.color }));
   const countFor = (id: string) => stageCounts.find((c) => c.stageId === id)?._count ?? 0;
   const query = (patch: Record<string, string>) => {
-    const params = new URLSearchParams({ q, stage, user: applier, source, sort, page: String(page), ...patch });
-    for (const [k, v] of [...params]) if (!v || (k === "page" && v === "1") || (k === "sort" && v === "newest")) params.delete(k);
+    const params = new URLSearchParams({ q, stage, user: applier, source, sort, size: String(size), page: String(page), ...patch });
+    for (const [k, v] of [...params])
+      if (!v || (k === "page" && v === "1") || (k === "sort" && v === "newest") || (k === "size" && v === String(DEFAULT_PAGE_SIZE))) params.delete(k);
     const s = params.toString();
     return s ? `/applications?${s}` : "/applications";
   };
@@ -80,7 +87,7 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
             {isOwner ? "All applications submitted by job appliers." : "Jobs you have applied to."}
           </p>
         </div>
-        <NewApplicationButton stages={stageOptions} />
+        <AutoRefresh />
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -149,6 +156,7 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
           <option value="company">Company A–Z</option>
           <option value="title">Title A–Z</option>
         </select>
+        {size !== DEFAULT_PAGE_SIZE && <input type="hidden" name="size" value={size} />}
         <button className="h-9 rounded-md bg-slate-800 px-4 text-sm font-medium text-white hover:bg-slate-700">Filter</button>
         {(q || stage || source || applier) && (
           <Link href="/applications" className="h-9 px-2 text-sm leading-9 text-slate-500 hover:text-slate-800">
@@ -189,7 +197,9 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
                 <td className="px-3 py-2.5">
                   <StageSelect key={`${a.id}-${a.stageId}`} id={a.id} stageId={a.stageId} stages={stageOptions} />
                 </td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{formatDate(a.appliedAt)}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">
+                  <LocalTime value={a.appliedAt.toISOString()} stacked />
+                </td>
                 <td className="px-3 py-2.5">
                   {a.resumeUrl ? (
                     <a href={a.resumeUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
@@ -220,7 +230,7 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
             {applications.length === 0 && (
               <tr>
                 <td colSpan={isOwner ? 8 : 7} className="px-4 py-12 text-center text-slate-500">
-                  No applications found. Save jobs from the browser extension or add one manually.
+                  No applications found. Save jobs from the browser extension.
                 </td>
               </tr>
             )}
@@ -228,25 +238,7 @@ export default async function ApplicationsPage(props: PageProps<"/applications">
         </table>
       </div>
 
-      {pages > 1 && (
-        <div className="flex items-center justify-between text-sm text-slate-600">
-          <span>
-            {total} applications · page {page} of {pages}
-          </span>
-          <div className="flex gap-2">
-            {page > 1 && (
-              <Link href={query({ page: String(page - 1) })} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">
-                Previous
-              </Link>
-            )}
-            {page < pages && (
-              <Link href={query({ page: String(page + 1) })} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">
-                Next
-              </Link>
-            )}
-          </div>
-        </div>
-      )}
+      <Pagination page={page} pages={pages} size={size} total={total} />
     </div>
   );
 }

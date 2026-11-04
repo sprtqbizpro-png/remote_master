@@ -65,4 +65,4 @@ export const POST = extRoute(async (request) => {
     if (error instanceof AutofillNotConfiguredError) return apiError(error.message, 503);
     throw error;
   }
-});
+}, { applies: true });

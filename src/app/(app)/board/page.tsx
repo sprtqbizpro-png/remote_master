@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { listStages, visibleWhere } from "@/lib/applications";
 import { first } from "@/lib/format";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { Board } from "./board";
 import { BoardFilters } from "./board-filters";
 
@@ -48,6 +49,7 @@ export default async function BoardPage(props: PageProps<"/board">) {
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <BoardFilters appliers={appliers} applier={applier} />
+          <AutoRefresh />
         </div>
       </div>
       <Board

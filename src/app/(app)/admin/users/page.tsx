@@ -25,6 +25,8 @@ export default async function UsersPage() {
           email: u.email,
           role: u.role as "OWNER" | "APPLIER",
           active: u.active,
+          suspendedAt: u.suspendedAt?.toISOString() ?? null,
+          suspendedReason: u.suspendedReason,
           sheetId: u.sheetId,
           applications: u._count.applications,
           lastLoginAt: u.lastLoginAt?.toISOString() ?? null,

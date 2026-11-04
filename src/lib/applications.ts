@@ -517,6 +517,7 @@ export class UserFacingError extends Error {}
 
 export function errorMessage(error: unknown) {
   if (error instanceof z.ZodError) return error.issues.map((i) => i.message).join("; ");
+  if (error instanceof Error && error.name === "CannotApplyError") return error.message;
   if (error instanceof UserFacingError || error instanceof SheetNotConfiguredError || error instanceof ResumeStorageError) {
     return error.message;
   }

@@ -98,6 +98,35 @@ export async function resetPasswordAction(id: string, newPassword: string) {
   }, ["/admin/users"]);
 }
 
+/**
+ * Suspends an applier: they can still sign in and see their applications, but every attempt to
+ * apply (extension or platform) is refused with a message to contact the owner, until lifted.
+ */
+export async function suspendUserAction(id: string, reason: string) {
+  const me = await requireOwner();
+  return run(async () => {
+    const why = z.string().trim().max(300).parse(reason ?? "");
+    if (id === me.id) throw new UserFacingError("You cannot suspend your own account.");
+    const user = await db.user.findUnique({ where: { id } });
+    if (!user) throw new UserFacingError("User not found.");
+    if (user.role === "OWNER") throw new UserFacingError("Owners can't be suspended. Change their role to job applier first.");
+    await db.user.update({ where: { id }, data: { suspendedAt: new Date(), suspendedReason: why } });
+    forgetUser(id);
+    return `${user.name} is suspended. They can't apply until you lift the suspension.`;
+  }, ["/admin/users"]);
+}
+
+export async function liftSuspensionAction(id: string) {
+  await requireOwner();
+  return run(async () => {
+    const user = await db.user.findUnique({ where: { id } });
+    if (!user) throw new UserFacingError("User not found.");
+    await db.user.update({ where: { id }, data: { suspendedAt: null, suspendedReason: "" } });
+    forgetUser(id);
+    return `${user.name} can apply again.`;
+  }, ["/admin/users"]);
+}
+
 export async function deleteUserAction(id: string) {
   const me = await requireOwner();
   return run(async () => {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { getRequestUser } from "@/lib/auth";
+import { assertCanApply, getRequestUser } from "@/lib/auth";
 import { errorMessage } from "@/lib/applications";
 import { readTemplateForm, saveTemplate } from "@/lib/resume-kit";
 
@@ -9,6 +9,7 @@ export async function POST(request: Request) {
   const user = await getRequestUser(request);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   try {
+    await assertCanApply(user);
     const { data, file } = await readTemplateForm(request);
     const saved = await saveTemplate(user, data, file);
     revalidatePath("/resume-kit");

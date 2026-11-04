@@ -21,7 +21,7 @@ import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, v
 import { CSS } from "@dnd-kit/utilities";
 import type { StageOption } from "@/components/application-controls";
 import { cn } from "@/components/ui";
-import { formatDate } from "@/lib/format";
+import { LocalTime } from "@/components/local-time";
 import { moveApplicationAction } from "../applications/actions";
 import { AddFromAppliedButton } from "./add-from-applied";
 
@@ -264,7 +264,7 @@ function CardView({ card, showApplier, dragging }: { card: BoardCard; showApplie
       <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
         {card.source && <span className="rounded bg-slate-100 px-1.5 py-0.5">{card.source}</span>}
         {card.hasResume && <span title="Resume attached">📄</span>}
-        <span className="ml-auto">{formatDate(card.appliedAt)}</span>
+        <LocalTime value={card.appliedAt} className="ml-auto" />
       </div>
       {showApplier && <div className="mt-1.5 border-t border-slate-100 pt-1.5 text-[11px] text-slate-500">👤 {card.applier}</div>}
     </article>

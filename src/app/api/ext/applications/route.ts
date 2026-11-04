@@ -72,4 +72,4 @@ export const POST = extRoute(async (request, user) => {
     },
     { status: 201 },
   );
-});
+}, { applies: true });

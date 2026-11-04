@@ -17,4 +17,4 @@ export const POST = extRoute(async (request, user) => {
   const companies = [...(await appliedCompanies(user.id)).values()].map((c) => c.name);
   const result = await cleanupAppliedCompanies(sheetId, companies, { dryRun });
   return NextResponse.json(result);
-});
+}, { applies: true });

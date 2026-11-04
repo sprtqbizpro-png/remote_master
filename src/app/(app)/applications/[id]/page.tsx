@@ -3,8 +3,8 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { listStages, visibleWhere } from "@/lib/applications";
-import { formatDate } from "@/lib/format";
 import { DeleteApplicationButton, StageSelect } from "@/components/application-controls";
+import { LocalTime } from "@/components/local-time";
 import { DetailsEditor, NotesEditor, ResumeUploader } from "./editors";
 
 export default async function ApplicationDetailPage(props: PageProps<"/applications/[id]">) {
@@ -39,7 +39,9 @@ export default async function ApplicationDetailPage(props: PageProps<"/applicati
             {app.location && <span className="text-slate-400"> · {app.location}</span>}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-xs text-slate-500">
-            <span>Applied {formatDate(app.appliedAt, true)}</span>
+            <span>
+              Applied <LocalTime value={app.appliedAt.toISOString()} />
+            </span>
             {user.role === "OWNER" && <span>by {app.user.name}</span>}
             {app.source && <span>via {app.source}</span>}
             {app.sheetTab && <span>Sheet tab: {app.sheetTab}</span>}
@@ -131,7 +133,7 @@ export default async function ApplicationDetailPage(props: PageProps<"/applicati
                   <span className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-indigo-500" />
                   <div className="text-slate-800">{e.message}</div>
                   <div className="text-xs text-slate-500">
-                    {formatDate(e.createdAt, true)}
+                    <LocalTime value={e.createdAt.toISOString()} />
                     {e.user && ` · ${e.user.name}`}
                   </div>
                 </li>
